@@ -233,14 +233,16 @@ class AudioTranscriberWhisper:
                 # Save to temp file
                 self.text_queue.put(("status", "⚙️ Transcribing..."))
                 
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
-                    temp_path = temp_audio.name
-                    wf = wave.open(temp_path, 'wb')
-                    wf.setnchannels(CHANNELS)
-                    wf.setsampwidth(p.get_sample_size(FORMAT))
-                    wf.setframerate(RATE)
-                    wf.writeframes(b''.join(frames))
-                    wf.close()
+                # Create temp file and close it immediately to avoid locking issues on Windows
+                temp_fd, temp_path = tempfile.mkstemp(suffix=".wav")
+                os.close(temp_fd)  # Close the file descriptor immediately
+                
+                wf = wave.open(temp_path, 'wb')
+                wf.setnchannels(CHANNELS)
+                wf.setsampwidth(p.get_sample_size(FORMAT))
+                wf.setframerate(RATE)
+                wf.writeframes(b''.join(frames))
+                wf.close()
                 
                 # Transcribe with Whisper
                 try:

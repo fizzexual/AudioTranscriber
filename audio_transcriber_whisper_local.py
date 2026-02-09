@@ -9,6 +9,9 @@ import os
 import tempfile
 import whisper
 import torch
+import numpy as np
+import soundfile as sf
+from scipy import signal
 
 class AudioTranscriberWhisperLocal:
     def __init__(self, root):
@@ -54,8 +57,24 @@ class AudioTranscriberWhisperLocal:
         
         model_combo.bind('<<ComboboxSelected>>', self.update_model_info)
         
+        # Device selection
+        tk.Label(model_frame, text="Device:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.device_var = tk.StringVar(value="auto")
+        device_combo = ttk.Combobox(model_frame, textvariable=self.device_var,
+                                    values=["auto", "cpu", "cuda"],
+                                    state="readonly", width=15)
+        device_combo.grid(row=1, column=1, padx=10, pady=5, sticky=tk.W)
+        
+        # Check if CUDA is available
+        cuda_available = torch.cuda.is_available()
+        cuda_status = "✓ GPU Available" if cuda_available else "✗ GPU Not Available"
+        cuda_color = "green" if cuda_available else "orange"
+        self.device_info = tk.Label(model_frame, text=f"{cuda_status} (auto = use GPU if available)", 
+                                   fg=cuda_color, font=("Arial", 8))
+        self.device_info.grid(row=1, column=2, padx=10)
+        
         tk.Button(model_frame, text="Load Model", command=self.load_model,
-                 bg="#4CAF50", fg="white", font=("Arial", 10, "bold")).grid(row=0, column=3, padx=10)
+                 bg="#4CAF50", fg="white", font=("Arial", 10, "bold")).grid(row=0, column=3, rowspan=2, padx=10)
         
         # Microphone selection frame
         mic_frame = tk.LabelFrame(self.root, text="Microphone Settings", 
@@ -64,7 +83,7 @@ class AudioTranscriberWhisperLocal:
         
         tk.Label(mic_frame, text="Select Microphone:").grid(row=0, column=0, sticky=tk.W, pady=5)
         self.mic_combo = ttk.Combobox(mic_frame, width=50, state="readonly")
-        self.mic_combo.grid(row=0, column=1, padx=10, pady=5)
+        self.mic_combo.grid(row=0, column=1, padx=10, pady=5, columnspan=2)
         
         tk.Label(mic_frame, text="Language:").grid(row=1, column=0, sticky=tk.W, pady=5)
         self.language_var = tk.StringVar(value="auto")
@@ -79,7 +98,11 @@ class AudioTranscriberWhisperLocal:
         chunk_scale = tk.Scale(mic_frame, from_=3, to=10, orient=tk.HORIZONTAL,
                               variable=self.chunk_var, length=200)
         chunk_scale.grid(row=2, column=1, padx=10, pady=5, sticky=tk.W)
-        tk.Label(mic_frame, text="seconds").grid(row=2, column=2)
+        
+        chunk_info = tk.Label(mic_frame, 
+                             text="seconds (How long to record before transcribing.\nShorter = faster response, Longer = better accuracy)",
+                             font=("Arial", 8), fg="gray", justify=tk.LEFT)
+        chunk_info.grid(row=2, column=2, padx=5, sticky=tk.W)
         
         # Control frame
         control_frame = tk.Frame(self.root)
@@ -166,6 +189,7 @@ class AudioTranscriberWhisperLocal:
     def load_model(self):
         """Load Whisper model"""
         model_size = self.model_var.get()
+        device_choice = self.device_var.get()
         
         self.text_area.insert(tk.END, f"[Loading Whisper {model_size} model...]\n")
         self.text_area.insert(tk.END, "[First time will download the model]\n")
@@ -173,14 +197,24 @@ class AudioTranscriberWhisperLocal:
         
         def load_thread():
             try:
-                # Check if CUDA is available
-                device = "cuda" if torch.cuda.is_available() else "cpu"
-                self.text_queue.put(("text", f"[Using device: {device.upper()}]\n"))
+                # Determine device
+                if device_choice == "auto":
+                    device = "cuda" if torch.cuda.is_available() else "cpu"
+                    self.text_queue.put(("text", f"[Auto-selected device: {device.upper()}]\n"))
+                else:
+                    device = device_choice
+                    self.text_queue.put(("text", f"[Using device: {device.upper()}]\n"))
                 
                 if device == "cpu":
                     self.text_queue.put(("text", "[Running on CPU - will be slower]\n"))
                 else:
-                    self.text_queue.put(("text", "[GPU detected - will be fast!]\n"))
+                    if torch.cuda.is_available():
+                        gpu_name = torch.cuda.get_device_name(0)
+                        self.text_queue.put(("text", f"[GPU detected: {gpu_name}]\n"))
+                        self.text_queue.put(("text", "[Using GPU - will be fast!]\n"))
+                    else:
+                        self.text_queue.put(("text", "[WARNING: CUDA selected but not available, falling back to CPU]\n"))
+                        device = "cpu"
                 
                 self.text_queue.put(("text", "[Downloading/Loading model...]\n"))
                 self.model = whisper.load_model(model_size, device=device)
@@ -263,22 +297,48 @@ class AudioTranscriberWhisperLocal:
                 # Save to temp file
                 self.text_queue.put(("status", "⚙️ Transcribing..."))
                 
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
-                    temp_path = temp_audio.name
-                    wf = wave.open(temp_path, 'wb')
-                    wf.setnchannels(CHANNELS)
-                    wf.setsampwidth(p.get_sample_size(FORMAT))
-                    wf.setframerate(RATE)
-                    wf.writeframes(b''.join(frames))
-                    wf.close()
+                # Create temp file and close it immediately to avoid locking issues on Windows
+                temp_fd, temp_path = tempfile.mkstemp(suffix=".wav")
+                os.close(temp_fd)  # Close the file descriptor immediately
+                
+                wf = wave.open(temp_path, 'wb')
+                wf.setnchannels(CHANNELS)
+                wf.setsampwidth(p.get_sample_size(FORMAT))
+                wf.setframerate(RATE)
+                wf.writeframes(b''.join(frames))
+                wf.close()
                 
                 # Transcribe with Whisper
                 try:
+                    self.text_queue.put(("text", f"[DEBUG] Temp file created at: {temp_path}\n"))
+                    self.text_queue.put(("text", f"[DEBUG] File exists: {os.path.exists(temp_path)}\n"))
+                    self.text_queue.put(("text", f"[DEBUG] File size: {os.path.getsize(temp_path) if os.path.exists(temp_path) else 'N/A'} bytes\n"))
+                    
+                    # Load audio manually to avoid ffmpeg dependency
+                    import numpy as np
+                    import soundfile as sf
+                    
+                    # Read the WAV file directly
+                    audio_data, sample_rate = sf.read(temp_path)
+                    
+                    # Convert to mono if stereo
+                    if len(audio_data.shape) > 1:
+                        audio_data = audio_data.mean(axis=1)
+                    
+                    # Convert to float32 and normalize to [-1, 1]
+                    audio_data = audio_data.astype(np.float32)
+                    
+                    # Resample to 16kHz if needed (Whisper expects 16kHz)
+                    if sample_rate != 16000:
+                        from scipy import signal
+                        num_samples = int(len(audio_data) * 16000 / sample_rate)
+                        audio_data = signal.resample(audio_data, num_samples)
+                    
                     language = self.language_var.get()
                     if language == "auto":
-                        result = self.model.transcribe(temp_path, fp16=False)
+                        result = self.model.transcribe(audio_data, fp16=False)
                     else:
-                        result = self.model.transcribe(temp_path, language=language, fp16=False)
+                        result = self.model.transcribe(audio_data, language=language, fp16=False)
                     
                     text = result["text"].strip()
                     detected_lang = result.get("language", "unknown")
@@ -291,7 +351,10 @@ class AudioTranscriberWhisperLocal:
                             self.text_queue.put(("text", f"[{timestamp}] {text}\n"))
                     
                 except Exception as e:
+                    import traceback
+                    error_details = traceback.format_exc()
                     self.text_queue.put(("text", f"[Transcription error: {e}]\n"))
+                    self.text_queue.put(("text", f"[ERROR DETAILS]\n{error_details}\n"))
                 
                 finally:
                     # Clean up temp file
