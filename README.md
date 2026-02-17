@@ -62,7 +62,7 @@ A powerful, free, and fully local audio transcription application that leverages
 ### Step 1: Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/audio-transcriber.git
+git clone https://github.com/fizzexual/audiotranscriber.git
 cd audio-transcriber
 ```
 
