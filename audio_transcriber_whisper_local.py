@@ -310,14 +310,6 @@ class AudioTranscriberWhisperLocal:
                 
                 # Transcribe with Whisper
                 try:
-                    self.text_queue.put(("text", f"[DEBUG] Temp file created at: {temp_path}\n"))
-                    self.text_queue.put(("text", f"[DEBUG] File exists: {os.path.exists(temp_path)}\n"))
-                    self.text_queue.put(("text", f"[DEBUG] File size: {os.path.getsize(temp_path) if os.path.exists(temp_path) else 'N/A'} bytes\n"))
-                    
-                    # Load audio manually to avoid ffmpeg dependency
-                    import numpy as np
-                    import soundfile as sf
-                    
                     # Read the WAV file directly
                     audio_data, sample_rate = sf.read(temp_path)
                     
@@ -330,15 +322,14 @@ class AudioTranscriberWhisperLocal:
                     
                     # Resample to 16kHz if needed (Whisper expects 16kHz)
                     if sample_rate != 16000:
-                        from scipy import signal
                         num_samples = int(len(audio_data) * 16000 / sample_rate)
                         audio_data = signal.resample(audio_data, num_samples)
                     
                     language = self.language_var.get()
                     if language == "auto":
-                        result = self.model.transcribe(audio_data, fp16=False)
+                        result = self.model.transcribe(audio_data)
                     else:
-                        result = self.model.transcribe(audio_data, language=language, fp16=False)
+                        result = self.model.transcribe(audio_data, language=language)
                     
                     text = result["text"].strip()
                     detected_lang = result.get("language", "unknown")
@@ -351,10 +342,7 @@ class AudioTranscriberWhisperLocal:
                             self.text_queue.put(("text", f"[{timestamp}] {text}\n"))
                     
                 except Exception as e:
-                    import traceback
-                    error_details = traceback.format_exc()
                     self.text_queue.put(("text", f"[Transcription error: {e}]\n"))
-                    self.text_queue.put(("text", f"[ERROR DETAILS]\n{error_details}\n"))
                 
                 finally:
                     # Clean up temp file

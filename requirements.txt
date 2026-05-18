@@ -3,3 +3,6 @@ PyAudio==0.2.14
 pywin32==306
 soundfile
 scipy
+openai-whisper
+torch
+numpy
