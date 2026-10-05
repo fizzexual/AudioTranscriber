@@ -1,4 +1,4 @@
-# 🎤 Whisper Local Audio Transcriber
+# 🎤 Whisper Local Audio Transcriber 🍂
 
 <div align="center">
 
@@ -12,6 +12,12 @@
 [Features](#-features) • [Installation](#-installation) • [Usage](#-usage) • [Configuration](#%EF%B8%8F-configuration) • [Documentation](#-documentation)
 
 </div>
+
+---
+
+## About
+
+A single-file Python desktop app for Windows users who want live microphone transcription without sending audio to a cloud service. It wraps the open-source Whisper model in a Tkinter window: pick a model size and a microphone, press start, and timestamped text appears chunk by chunk. It is a working personal tool (about 380 lines) rather than a maintained product; it transcribes live microphone input only, not audio files.
 
 ---
 
